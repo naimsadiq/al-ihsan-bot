@@ -9,48 +9,52 @@ app.use(bodyParser.json());
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
+// বেসিক রুট (বট চলছে কিনা চেক করার জন্য)
 app.get("/", (req, res) => {
   res.send("Al-Ihsan Foundation Bot is Running!");
 });
 
-// আইস ব্রেকার্স (Ice Breakers) সেটআপ (নতুন প্রফেশনাল লেখা)
-// app.get("/setup-profile", (req, res) => {
-//   let request_body = {
-//     ice_breakers: [
-//       {
-//         call_to_actions: [
-//           {
-//             question: "🏢 আপনাদের ফাউন্ডেশন সম্পর্কে জানতে চাই",
-//             payload: "ABOUT_US",
-//           },
-//           {
-//             question: "🤲 আমি অনুদান/সাহায্য দিতে চাই",
-//             payload: "DONATE",
-//           },
-//           {
-//             question: "📞 আপনাদের সাথে যোগাযোগ করতে চাই",
-//             payload: "CONTACT",
-//           },
-//         ],
-//         locale: "default",
-//       },
-//     ],
-//   };
+// আইস ব্রেকার্স (Ice Breakers) সেটআপ
+app.get("/setup-profile", (req, res) => {
+  let request_body = {
+    ice_breakers: [
+      {
+        call_to_actions: [
+          {
+            question: "🏢 আপনাদের ফাউন্ডেশন সম্পর্কে জানতে চাই",
+            payload: "ABOUT_US",
+          },
+          {
+            question: "🤲 আমি অনুদান/সাহায্য দিতে চাই",
+            payload: "DONATE",
+          },
+          {
+            question: "📞 আপনাদের সাথে যোগাযোগ করতে চাই",
+            payload: "CONTACT",
+          },
+        ],
+        locale: "default",
+      },
+    ],
+  };
 
-//   axios
-//     .post(
-//       `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
-//       request_body,
-//     )
-//     .then(() => {
-//       res.send("✅ নতুন প্রফেশনাল Ice Breakers সফলভাবে সেটআপ হয়েছে!");
-//     })
-//     .catch((error) => {
-//       res.send("❌ সমস্যা হয়েছে: " + error.response.data.error.message);
-//     });
-// });
+  axios
+    .post(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+      request_body,
+    )
+    .then(() => {
+      res.send("✅ নতুন প্রফেশনাল Ice Breakers সফলভাবে সেটআপ হয়েছে!");
+    })
+    .catch((error) => {
+      res.send(
+        "❌ সমস্যা হয়েছে: " +
+          (error.response ? error.response.data.error.message : error.message),
+      );
+    });
+});
 
-// Facebook Webhook Verification
+// Facebook Webhook Verification (GET)
 app.get("/webhook", (req, res) => {
   let mode = req.query["hub.mode"];
   let token = req.query["hub.verify_token"];
@@ -58,6 +62,7 @@ app.get("/webhook", (req, res) => {
 
   if (mode && token) {
     if (mode === "subscribe" && token === VERIFY_TOKEN) {
+      console.log("✅ Webhook Verified!");
       res.status(200).send(challenge);
     } else {
       res.sendStatus(403);
@@ -65,19 +70,28 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// মেসেজ রিসিভ করার জন্য Webhook POST
+// মেসেজ ও Postback রিসিভ করার জন্য Webhook (POST)
 app.post("/webhook", (req, res) => {
   let body = req.body;
 
   if (body.object === "page") {
     body.entry.forEach(function (entry) {
-      let webhook_event = entry.messaging[0];
-      let sender_psid = webhook_event.sender.id;
+      // ইভেন্ট আছে কিনা চেক করা (সার্ভার ক্র্যাশ রোধ করতে)
+      if (entry.messaging && entry.messaging.length > 0) {
+        let webhook_event = entry.messaging[0];
+        let sender_psid = webhook_event.sender.id;
 
-      if (webhook_event.message) {
-        handleMessage(sender_psid, webhook_event.message);
+        // যদি সাধারণ মেসেজ বা Quick Reply হয়
+        if (webhook_event.message) {
+          handleMessage(sender_psid, webhook_event.message);
+        }
+        // যদি Ice Breaker বা Button ক্লিক (Postback) হয়
+        else if (webhook_event.postback) {
+          handlePostback(sender_psid, webhook_event.postback);
+        }
       }
     });
+    // ফেইসবুককে 200 OK রেসপন্স পাঠানো (নাহলে ফেইসবুক বারবার মেসেজ পাঠাতে থাকবে)
     res.status(200).send("EVENT_RECEIVED");
   } else {
     res.sendStatus(404);
@@ -86,55 +100,38 @@ app.post("/webhook", (req, res) => {
 
 // মেসেজ লজিক হ্যান্ডেল করা
 function handleMessage(sender_psid, received_message) {
-  let response;
   let text = received_message.text ? received_message.text.trim() : "";
   let lowerText = text.toLowerCase();
 
-  // ১. আমাদের সম্পর্কে (Ice Breaker & Quick Reply Match)
+  // Quick Reply এর Payload চেক করা
+  if (received_message.quick_reply && received_message.quick_reply.payload) {
+    handlePayloadActions(sender_psid, received_message.quick_reply.payload);
+    return;
+  }
+
+  // স্বাগতম মেসেজ (hi, hello, salam)
   if (
-    text === "🏢 আপনাদের ফাউন্ডেশন সম্পর্কে জানতে চাই" ||
-    text === "🏢 আমাদের সম্পর্কে"
-  ) {
-    response = {
-      text: "আল-ইহসান ফাউন্ডেশন একটি অলাভজনক সেবামূলক প্রতিষ্ঠান। 🌿\n\nআমরা সমাজের অসহায়, দরিদ্র ও সুবিধাবঞ্চিত মানুষের কল্যাণে কাজ করে যাচ্ছি। আমাদের প্রধান লক্ষ্য হলো সবার মুখে হাসি ফোটানো এবং একটি সুন্দর সমাজ গড়ে তোলা। আপনার যেকোনো পরামর্শ বা সহযোগিতা আমাদের একান্ত কাম্য।",
-    };
-  }
-  // ২. অনুদান বা সাহায্য (Ice Breaker & Quick Reply Match)
-  else if (
-    text === "🤲 আমি অনুদান/সাহায্য দিতে চাই" ||
-    text === "🤲 অনুদান দিন"
-  ) {
-    response = {
-      text: "জাযাকাল্লাহ খায়ের! আপনার মহতী উদ্যোগের জন্য অসংখ্য ধন্যবাদ। 🌸\n\nআপনার যাকাত, সাদাকাহ বা সাধারণ অনুদান পাঠাতে পারেন নিচের নম্বরে:\n📱 বিকাশ/নগদ: 01326098250 (পার্সোনাল)\n\nঅনুদান পাঠানোর পর দয়া করে এখানে একটি মেসেজ দিয়ে কনফার্ম করবেন, ইনশাআল্লাহ।",
-    };
-  }
-  // ৩. যোগাযোগ (Ice Breaker & Quick Reply Match)
-  else if (
-    text === "📞 আপনাদের সাথে যোগাযোগ করতে চাই" ||
-    text === "📞 যোগাযোগ"
-  ) {
-    response = {
-      text: "আমাদের সাথে যোগাযোগ করার বিস্তারিত তথ্য নিচে দেওয়া হলো: 👇\n\n📞 মোবাইল: 01326098250\n📧 ইমেইল: nayemsadiq2013@gmail.com\n\nযেকোনো প্রয়োজনে আমাদের সরাসরি কল করতে পারেন।",
-    };
-  }
-  // ৪. স্বাগতম মেসেজ (hi, hello, salam)
-  else if (
     lowerText === "hi" ||
     lowerText === "hello" ||
     lowerText.includes("আসসালামু আলাইকুম") ||
     lowerText.includes("salam")
   ) {
-    response = {
-      text: "ওয়া আলাইকুমুস সালাম ওয়া রাহমাতুল্লাহ! 🌸\n\nআল-ইহসান ফাউন্ডেশনের অফিসিয়াল পেজে আপনাকে স্বাগতম। দয়া করে নিচের মেনু থেকে আপনার প্রয়োজনীয় অপশনটি বেছে নিন:",
+    let messageText =
+      lowerText === "hi" || lowerText === "hello"
+        ? "আল-ইহসান ফাউন্ডেশনের অফিসিয়াল পেজে আপনাকে স্বাগতম।\n\nদয়া করে নিচের মেনু থেকে আপনার প্রয়োজনীয় অপশনটি বেছে নিন:"
+        : "ওয়া আলাইকুমুস সালাম ওয়া রাহমাতুল্লাহ! 🌸\n\nআল-ইহসান ফাউন্ডেশনের অফিসিয়াল পেজে আপনাকে স্বাগতম।\n\nদয়া করে নিচের মেনু থেকে আপনার প্রয়োজনীয় অপশনটি বেছে নিন:";
+
+    let response = {
+      text: messageText,
       quick_replies: [
         {
           content_type: "text",
-          title: "🏢 আমাদের সম্পর্কে",
+          title: "🏢 আপনাদের সম্পর্কে",
           payload: "ABOUT_US",
         },
         {
           content_type: "text",
-          title: "🤲 অনুদান দিন",
+          title: "🤲 অনুদান দিতে চাই",
           payload: "DONATE",
         },
         {
@@ -144,26 +141,67 @@ function handleMessage(sender_psid, received_message) {
         },
       ],
     };
+    callSendAPI(sender_psid, response);
   }
-  // ৫. অন্য কোনো সাধারণ মেসেজ লিখলে (অপেক্ষা করার মেসেজ)
+  // অন্য কোনো সাধারণ মেসেজ লিখলে
   else {
-    response = {
-      text: "জাযাকাল্লাহ খায়ের! আমরা আপনার মেসেজটি পেয়েছি। 📩\n\nদয়া করে কিছুক্ষণ অপেক্ষা করুন, আমাদের একজন প্রতিনিধি খুব শিগগিরই আপনার মেসেজটি পড়ে রিপ্লাই দেবেন ইনশাআল্লাহ।",
+    let response = {
+      text: "জাযাকাল্লাহ খায়ের! আমরা আপনার মেসেজটি পেয়েছি। 📩\n\nদয়া করে কিছুক্ষণ অপেক্ষা করুন, আমাদের একজন প্রতিনিধি খুব শিগগিরই আপনার মেসেজটি পড়ে রিপ্লাই দেবেন ইনশাআল্লাহ।",
     };
+    callSendAPI(sender_psid, response);
+  }
+}
+
+// Postback (Ice Breakers) হ্যান্ডেল করা
+function handlePostback(sender_psid, received_postback) {
+  let payload = received_postback.payload;
+  handlePayloadActions(sender_psid, payload);
+}
+
+// Payload অনুযায়ী রেসপন্স তৈরি করা (Ice Breaker & Quick Reply উভয়ের জন্য)
+function handlePayloadActions(sender_psid, payload) {
+  let response;
+
+  switch (payload) {
+    case "ABOUT_US":
+      response = {
+        text: "আল-ইহসান ফাউন্ডেশন একটি অলাভজনক সেবামূলক প্রতিষ্ঠান। 🌿\n\nআমরা সমাজের অসহায়, দরিদ্র ও সুবিধাবঞ্চিত মানুষের কল্যাণে কাজ করে যাচ্ছি। আমাদের প্রধান লক্ষ্য হলো সবার মুখে হাসি ফোটানো এবং একটি সুন্দর সমাজ গড়ে তোলা। আপনার যেকোনো পরামর্শ বা সহযোগিতা আমাদের একান্ত কাম্য।",
+      };
+      break;
+    case "DONATE":
+      response = {
+        text: "জাযাকাল্লাহ খায়ের! আপনার মহতী উদ্যোগের জন্য অসংখ্য ধন্যবাদ। 🌸\n\nআপনার যাকাত, সাদাকাহ বা সাধারণ অনুদান পাঠাতে পারেন নিচের নম্বরে:\n📱 বিকাশ/নগদ: 01326098250 (পার্সোনাল)\n\nঅনুদান পাঠানোর পর দয়া করে এখানে একটি মেসেজ দিয়ে কনফার্ম করবেন, ইনশাআল্লাহ।",
+      };
+      break;
+    case "CONTACT":
+      response = {
+        text: "আমাদের সাথে যোগাযোগ করার বিস্তারিত তথ্য নিচে দেওয়া হলো: 👇\n\n📞 মোবাইল: 01326098250\n📧 ইমেইল: nayemsadiq2013@gmail.com\n\nযেকোনো প্রয়োজনে আমাদের সরাসরি কল করতে পারেন।",
+      };
+      break;
+    default:
+      response = {
+        text: "দুঃখিত, আমি আপনার অনুরোধটি বুঝতে পারিনি। দয়া করে আবার চেষ্টা করুন।",
+      };
   }
 
-  // মেসেজ সেন্ড করা
   callSendAPI(sender_psid, response);
 }
 
 // Facebook Messenger API তে মেসেজ পাঠানোর ফাংশন
 function callSendAPI(sender_psid, response) {
+  if (!PAGE_ACCESS_TOKEN) {
+    console.error(
+      "❌ ভুল: PAGE_ACCESS_TOKEN পাওয়া যায়নি! Environment Variables চেক করুন।",
+    );
+    return;
+  }
+
   let request_body = {
-    recipient: {
-      id: sender_psid,
-    },
+    recipient: { id: sender_psid },
     message: response,
   };
+
+  console.log(`📤 ID: ${sender_psid} কে মেসেজ পাঠানোর চেষ্টা করছি...`);
 
   axios
     .post(
@@ -171,17 +209,24 @@ function callSendAPI(sender_psid, response) {
       request_body,
     )
     .then(() => {
-      console.log("Message sent!");
+      console.log("✅ মেসেজ সফলভাবে পাঠানো হয়েছে!");
     })
     .catch((error) => {
-      console.error("Unable to send message:", error.response.data);
+      if (error.response) {
+        console.error("❌ ফেইসবুক থেকে এরর এসেছে:", error.response.data);
+      } else {
+        console.error("❌ সার্ভার বা নেটওয়ার্ক সমস্যা:", error.message);
+      }
     });
 }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+// Vercel Deployment এর জন্য পোর্ট কনফ্লিক্ট রোধ করা
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
 
-// Vercel এর জন্য এক্সপোর্ট
+// Vercel Serverless Function এর জন্য এক্সপোর্ট
 module.exports = app;
